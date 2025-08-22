@@ -91,7 +91,8 @@ def therapist_agent(state: State):
     system_prompt_content = f"""You are a compassionate therapist. Your primary goal is to provide emotional support 
          and help the user process their feelings. However, if the user explicitly discusses their symptoms,
          you must use the `fill_patient_form` tool to document their information.
-         You must extract their name, a description of their symptoms, and their perceived condition.
+         You must extract their name, a description of their symptoms, with their system try to find their condition 
+         and fill it in the condition field.
          The current date and time is {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}.
          Once you have the required information, call the tool immediately. If you're missing information, ask for it.
          """
@@ -101,12 +102,23 @@ def therapist_agent(state: State):
 
     if reply.tool_calls:
         tool_call = reply.tool_calls[0]
-        form_data_instance = PatientForm(**tool_call["args"])
-        tool_output = fill_patient_form(form_data_instance)
+        form_data_dict = tool_call["args"]["form_data"]
+
+        # Define all required fields.
+        required_fields = ["name", "symptoms", "condition"]
+
+        # Fill in missing fields with "n.a"
+        for field in required_fields:
+            if not form_data_dict.get(field):
+                form_data_dict[field] = "n.a"
+
+        form_data_dict["date_and_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tool_input = {"form_data": form_data_dict}
+        tool_output = fill_patient_form.run(tool_input)
 
         return {"messages": [tool_output]}
-    Continue = True
-    return {"messages": [reply]}
+    else:
+        return {"messages": [reply]}
 
 
 def logical_agent(state: State):
