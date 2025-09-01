@@ -76,6 +76,40 @@ def fill_patient_form(form_data: PatientForm) -> str:
     return f"Patient form has been successfully completed and saved. Your unique ID is: {unique_id}"
 
 
+class GetPatientRecord(BaseModel):
+    unique_id: str = Field(description="The unique ID of the patient record to retrieve.")
+
+
+@tool
+def get_patient_record(unique_id: str) -> str:
+    """
+    Reads a patient record from 'users.csv' using the unique ID and returns their details.
+    """
+    file_name = "users.csv"
+    try:
+        with open(file_name, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get('unique_id') == unique_id:
+                    # Format the patient's data into a readable string
+                    record_details = (
+                        f"Is this you ?:\n"
+                        f"Name: {row.get('name', 'N/A')}\n"
+                        f"Symptoms: {row.get('symptoms', 'N/A')}\n"
+                        f"Condition: {row.get('condition', 'N/A')}\n"
+                        f"Date and Time: {row.get('date_and_time', 'N/A')}"
+                    )
+                    return record_details
+
+        # If the loop finishes without finding the ID
+        return f"Sorry, I couldn't find a record with the ID: {unique_id}. Please double-check it."
+
+    except FileNotFoundError:
+        return "The patient database file was not found. Please ensure 'users.csv' exists."
+    except Exception as e:
+        return f"An error occurred while retrieving the record: {str(e)}"
+
+
 class MessageClassifier(BaseModel):
     message_type: Literal["emotional", "logical", "exit"] = Field(
         ...,
@@ -96,7 +130,7 @@ def classify_message(state: State):
         {
             "role": "system",
             "content": """Classify the user message as either:
-            -'emotional': if it asks for emotional support, therapy, deals with feelings, or personal problems
+            -'emotional': if it asks for emotional support, therapy, deals with feelings, or personal problems or if they say they have already texted or spoken to you or **or if it contains a unique ID like a long alphanumeric string with hyphens**
             -'logical': if it asks for facts, information, ,logical analysis, or practical solutions
             -'exit': if the user wants to end the chat and say something along the lines of 'bye' or 'talk to you later'
             """
@@ -122,40 +156,57 @@ def therapist_agent(state: State):
     global Continue
     last_message = state["messages"][-1]
 
-    llm_with_tools = llm.bind_tools([fill_patient_form])
+    # Bind both tools to the LLM
+    llm_with_tools = llm.bind_tools([fill_patient_form, get_patient_record])
 
     system_prompt_content = f"""You are a compassionate therapist. Your primary goal is to provide emotional support 
-         and help the user process their feelings. However, if the user explicitly discusses their symptoms,
-         you must use the `fill_patient_form` tool to document their information.
-         You must extract their name, a description of their symptoms, with their system try to find their condition 
-         and fill it in the condition field.
+         and help the user process their feelings. However, you are also equipped with two tools:
+         1. `fill_patient_form`: Use this tool if the user explicitly discusses new symptoms and you can extract their name, symptoms, and condition.
+         2. `get_patient_record`: Use this tool **immediately** if the user provides a unique ID and asks to retrieve their record. The unique ID is a long alphanumeric string with hyphens (e.g., 'e5085acd-87bd-4608-bda7-a621d5b2bc9').
+         
+         **CRITICAL INSTRUCTION**: If a user's message contains a unique ID, your **sole objective** is to call the `get_patient_record` tool. Do not provide a response about not having memory.
+If a user mentions they have spoken to you before, you must ask them for their unique ID to retrieve their record.
+
          The current date and time is {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}.
-         Once you have the required information, call the tool immediately. If you're missing information, ask for it
-         after printing the form continue the conversation and give them the support needed.
+         Always check the user's request for a unique ID first. If they ask to retrieve their record and provide an ID, use the `get_patient_record` tool immediately.
+         If they provide symptoms and you have the necessary information, use `fill_patient_form`.
+         If you are missing information for either tool, politely ask for it.If they say they have already spoken to you
+         ask for their unique id.
+         
          """
 
     messages_with_prompt = [SystemMessage(content=system_prompt_content)] + state["messages"]
     reply = llm_with_tools.invoke(messages_with_prompt)
 
+    # Handle tool calls
     if reply.tool_calls:
         tool_call = reply.tool_calls[0]
-        tool_call_id = tool_call["id"]  # Extract the tool_call_id
-        form_data_dict = tool_call["args"]["form_data"]
+        tool_call_id = tool_call["id"]
+        tool_name = tool_call["name"]
+        tool_args = tool_call["args"]
 
-        required_fields = ["name", "symptoms", "condition"]
+        if tool_name == "fill_patient_form":
+            # Existing logic for filling the form
+            form_data_dict = tool_args["form_data"]
+            required_fields = ["name", "symptoms", "condition"]
+            for field in required_fields:
+                if not form_data_dict.get(field):
+                    form_data_dict[field] = "n.a"
+            form_data_dict["date_and_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            tool_output = fill_patient_form.run({"form_data": form_data_dict})
+            return {"messages": [ToolMessage(content=tool_output, name=tool_name, tool_call_id=tool_call_id)]}
 
-        for field in required_fields:
-            if not form_data_dict.get(field):
-                form_data_dict[field] = "n.a"
+        elif tool_name == "get_patient_record":
+            # New logic for getting the record
+            unique_id = tool_args["unique_id"]
+            tool_output = get_patient_record.run({"unique_id": unique_id})
+            return {"messages": [ToolMessage(content=tool_output, name=tool_name, tool_call_id=tool_call_id)]}
 
-        form_data_dict["date_and_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        tool_input = {"form_data": form_data_dict}
-        tool_output = fill_patient_form.run(tool_input)
-
-        # Pass the tool_call_id when creating the ToolMessage
-        return {"messages": [ToolMessage(content=tool_output, name="fill_patient_form", tool_call_id=tool_call_id)]}
     else:
+        # If no tool is called, respond as a therapist
         return {"messages": [AIMessage(content=reply.content)]}
+
+
 def logical_agent(state: State):
     global Continue
     last_message = state["messages"][-1]
@@ -214,8 +265,6 @@ graph_builder.add_edge("logical", END)
 graph_builder.add_edge("end_conversation", END)
 
 graph = graph_builder.compile()
-
-
 
 
 # ... your original LangGraph code ...
