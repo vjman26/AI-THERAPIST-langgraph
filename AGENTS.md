@@ -3,8 +3,8 @@
 This file is the primary project context to consult before making changes.
 
 ## Project purpose
-- A Gradio chat app that routes user messages through a LangGraph workflow.
-- Two primary modes: therapist (emotional support with intake form tooling) and logical (facts-only).
+- Gradio chat app that acts as an F1 2020 UDP telemetry advisor.
+- Uses LangGraph for a single F1 advisor agent.
 
 ## Entry point
 - `main.py` is the application entry point. Run with:
@@ -16,43 +16,30 @@ This file is the primary project context to consult before making changes.
   - `langgraph`
   - `langchain`
   - `dotenv`
-  - `pydantic`
+  - `f1-2020-telemetry` (UDP telemetry parsing)
 - Environment variables are loaded from `.env` via `load_dotenv()`.
 
 ## Core flow (LangGraph)
-- `classify_message` uses a structured LLM output to label a message as `emotional`, `logical`, or `exit`.
-- `router` maps classification to `therapist`, `logical`, or `end_conversation` nodes.
-- Graph flow: `START -> classifier -> router -> (therapist|logical|end_conversation) -> END`.
+- Single node graph: `START -> f1_advisor -> END`.
+- Advisor uses latest telemetry snapshot to answer practice/qualifying/race strategy questions.
 
-## Therapist agent behavior
-- Uses tool calls:
-  - `fill_patient_form(form_data: PatientForm)` writes to `users.csv` and returns a unique ID.
-  - `get_patient_record(unique_id: str)` reads from `users.csv` to retrieve a record.
-- When user provides a unique ID, it should retrieve the record immediately.
-- When user provides name and symptoms, it should fill the form and infer a condition.
-
-## Logical agent behavior
-- Provides concise, factual responses without emotional support.
-
-## End conversation agent behavior
-- Returns a warm goodbye with a gentle closing proverb.
-
-## Data storage
-- `users.csv` is the persistent store for patient intake forms.
-- Records include: `name`, `symptoms`, `condition`, `date_and_time`, `unique_id`.
+## UDP telemetry
+- Listens on UDP `127.0.0.1:20777`.
+- Telemetry packets are parsed by `TelemetryParser` using `f1_2020_telemetry.packets.unpack_udp_packet`.
+- Latest snapshot is merged in `TelemetryStore` so partial packets (session/lap/status) combine into a full view.
 
 ## UI
 - Gradio `ChatInterface` in `main.py`.
-- Title: `AI-Therapist`
-- Description: `How can i help you today!`
-- Example prompts: "I'm feeling very sad today.", "Ive already texted you", "bye"
+- Title: `F1 UDP Advisor`
+- Description: `Ask for practice, qualifying, or race strategy using live F1 2020 telemetry.`
 
 ## Conventions and cautions
-- Keep tool behavior deterministic and data format stable (`users.csv` fields).
-- Do not break the routing keys (`emotional`, `logical`, `exit`) or node names.
-- Maintain compatibility with the current LangGraph state shape:
-  - `State = { messages: list[BaseMessage], message_type: str | None }`
+- Do not remove UDP listener or snapshot storage logic.
+- Keep advisor responses aligned with session type and telemetry freshness.
+- If telemetry is missing or stale, advisor should ask for context.
 
 ## Testing
 - No automated tests in this repo.
-- Manual run: `python main.py` and verify chatbot behavior in the Gradio UI.
+- Manual run: `python main.py` and verify:
+  - UDP listener binds to `127.0.0.1:20777`
+  - Chat answers reference telemetry context when available.

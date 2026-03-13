@@ -1,0 +1,6 @@
+gradio
+langgraph
+langchain
+python-dotenv
+pydantic
+f1-2020-telemetry
