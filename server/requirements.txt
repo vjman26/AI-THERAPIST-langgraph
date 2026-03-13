@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+python-dotenv
+langchain
+langgraph
+f1-2020-telemetry
+pydantic
